@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Image_Editor/Image_Editor.csproj" />
+    <Project Path="src/Image_Editor_lib/Image_Editor_lib.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Test/Test.csproj" />
+  </Folder>
+</Solution>
