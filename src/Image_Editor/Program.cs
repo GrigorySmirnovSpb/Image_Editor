@@ -9,9 +9,14 @@ class Program
         byte[,] imageRes;
         float[,] filter;
 
-        string filename = "";
+        string? filename = "";
         Console.WriteLine("Enter name of image");
         filename = Console.ReadLine();
+        if (filename == null || filename == "")
+        {
+            Console.WriteLine("Filename cannot be empty");
+            return -1;
+        }
         try 
         {
             image = IOImage.LoadAs2DArray(filename);
@@ -23,7 +28,7 @@ class Program
         }
 
         Console.WriteLine("Choose filter (write number)\n 1: Gaussian blur (default)\n 2: Edges kernel\n 3: ScaryKernel");
-        string filterType = Console.ReadLine();
+        string? filterType = Console.ReadLine();
         switch (filterType)
         {
             case "1":

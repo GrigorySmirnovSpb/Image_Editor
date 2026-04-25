@@ -32,7 +32,7 @@ public class IOImage
         {
             for (int j = 0; j < img.Width; j++)
             {
-                result[j,i] = img[i,j].PackedValue;
+                result[i,j] = img[j,i].PackedValue;
             }
         }
         return result;
@@ -46,7 +46,7 @@ public class IOImage
         {
             for (int j = 0; j < img.Width; j++)
             {
-                buf[index++] = img[i,j].PackedValue;
+                buf[index++] = img[j,i].PackedValue;
             }
         }
         return new myImage(img.Width, img.Height, buf, filename);
@@ -127,8 +127,7 @@ public class ConvolutionFunctions
                     }
                 }
             }
-            sum = sum;
-            return (byte)sum;
+            return (byte)Math.Clamp(sum, 0, 255);
         }
 
         for (int i = 0; i < imgH; i++)

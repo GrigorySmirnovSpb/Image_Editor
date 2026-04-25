@@ -22,7 +22,7 @@ namespace ImageEditorLib.Tests
         [TestMethod]
         public void Data_DefaultIsNull()
         {
-            var image = new myImage(10, 10, null, "test");
+            var image = new myImage(10, 10, null!, "test");
             Assert.IsNull(image.Data);
         }
     }
@@ -177,6 +177,32 @@ namespace ImageEditorLib.Tests
                 if (File.Exists(tempPath))
                     File.Delete(tempPath);
             }
+        }
+        [TestMethod]
+        public void LoadAsImage_Equal_LoadAs2DArray()
+        {
+            byte[,] data = new byte[4, 5]
+            {
+                { 10, 20, 30, 40, 50 },
+                { 60, 70, 80, 90, 100 },
+                { 110, 120, 130, 140, 150 },
+                { 160, 170, 180, 190, 200 },
+            };
+            IOImage.Save2DbyteArrayAsImage(data, "test.png");
+            var resultArray = IOImage.LoadAs2DArray("test.png");
+            var resultImage = IOImage.LoadAsImage("test.png");
+            Assert.AreEqual(resultImage.Height, resultArray.GetLength(0));
+            Assert.AreEqual(resultImage.Width, resultArray.GetLength(1));
+            for (int i = 0; i < resultArray.GetLength(0); i++)
+            {
+                for (int j = 0; j < resultArray.GetLength(1); j++)
+                {
+                    Assert.AreEqual(resultArray[i, j], resultImage.Data[i * resultArray.GetLength(1) + j]);
+                }
+            }
+            string tempPath = Path.Combine(Path.GetTempPath(), "test_output.png");
+            if (File.Exists(tempPath))
+                    File.Delete(tempPath);
         }
     }
 }
