@@ -13,7 +13,7 @@ class Program
             Console.WriteLine("Filename cannot be empty");
             return -1;
         }
-
+        filenames = filenames.Replace("'", "");
         string[] files = filenames.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (files.Length == 0)
         {
