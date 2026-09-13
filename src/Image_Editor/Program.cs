@@ -5,72 +5,77 @@ class Program
 {
     static int Main()
     {
-        byte[,] image;
-        byte[,] imageRes;
-        float[,] filter;
-
-        string? filename = "";
-        Console.WriteLine("Enter name of image");
-        filename = Console.ReadLine();
-        if (filename == null || filename == "")
+        string? filenames = "";
+        Console.WriteLine("Enter names of images, splited ','");
+        filenames = Console.ReadLine();
+        if (string.IsNullOrEmpty(filenames))
         {
             Console.WriteLine("Filename cannot be empty");
             return -1;
         }
-        try 
+
+        string[] files = filenames.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (files.Length == 0)
         {
-            image = IOImage.LoadAs2DArray(filename);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"File not found, try write full path\nExeption: {ex.Message}");
+            Console.WriteLine("Filename cannot be empty");
             return -1;
         }
 
-        Console.WriteLine("Choose filter (write number)\n 1: Gaussian blur (default)\n 2: Edges kernel\n 3: ScaryKernel");
-        string? filterType = Console.ReadLine();
-        switch (filterType)
+        Console.WriteLine("Enter filters (write numbers), splited ','\n 1: Gaussian blur (default)\n 2: Edges kernel\n 3: ScaryKernel");
+        string? filterInput = Console.ReadLine();
+        if (string.IsNullOrEmpty(filterInput))
         {
-            case "1":
-                {
-                    filter = Kernels.gaussianBlurKernel;
-                    break;
-                }
-            case "2":
-                {
-                    filter = Kernels.egdeKernel;
-                    break;
-                }
-            case "3":
-                {
-                    filter = Kernels.scaryKernel;
-                    break;
-                }
-            default:
-                {
-                    filter = Kernels.gaussianBlurKernel;
-                    break;
-                } 
-        }
-
-        try
-        {
-            imageRes = ConvolutionFunctions.applyFilter(filter, image);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Could not apply filter: {ex.Message})");
+            Console.WriteLine("Filter cannot be empty");
             return -1;
         }
 
-        try
+        string[] filterNums = filterInput.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (filterNums.Length == 0)
         {
-            IOImage.Save2DbyteArrayAsImage(imageRes, "out.png");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Cannot save image: {ex.Message}");
+            Console.WriteLine("Filter cannot be empty");
             return -1;
+        }
+
+        List<float[,]> filters = new List<float[,]>();
+        foreach (string num in filterNums)
+        {
+            switch (num)
+            {
+                case "1":
+                    filters.Add(Kernels.gaussianBlurKernel);
+                    break;
+                case "2":
+                    filters.Add(Kernels.egdeKernel);
+                    break;
+                case "3":
+                    filters.Add(Kernels.scaryKernel);
+                    break;
+                default:
+                    filters.Add(Kernels.gaussianBlurKernel);
+                    break;
+            }
+        }
+
+        for (int i = 0; i < files.Length; i++)
+        {
+            string filename = files[i];
+            int filterIndex = Math.Min(i, filters.Count - 1);
+            try
+            {
+                byte[,] image = IOImage.LoadAs2DArray(filename);
+                byte[,] res = ConvolutionFunctions.applyFilter(filters[filterIndex], image);
+
+                string outName = Path.Combine(
+                    Path.GetDirectoryName(filename) ?? ".",
+                    Path.GetFileNameWithoutExtension(filename) + "_out.png");
+                IOImage.Save2DbyteArrayAsImage(res, outName);
+                Console.WriteLine($"Saved: {outName}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Could not apply filter to {filename}: {ex.Message}");
+                return -1;
+            }
         }
 
         return 0;
