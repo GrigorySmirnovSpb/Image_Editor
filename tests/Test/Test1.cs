@@ -62,10 +62,12 @@ namespace ImageEditorLib.Tests
         }
     }
     [TestClass]
-    public class ConvolutionFunctionsTests
+    public class ConvolutionFunctionsDataParallelTests
     {
+        private const int ProcessorCount = 4;
+
         [TestMethod]
-        public void ApplyFilter_ReturnsCorrectDimensions()
+        public void ApplyFilterDataParallel_ReturnsCorrectDimensions()
         {
             byte[,] image = new byte[5, 5];
             float[,] filter = new float[,]
@@ -74,12 +76,12 @@ namespace ImageEditorLib.Tests
                 { 0, 1, 0 },
                 { 0, 0, 0 }
             };
-            var result = ConvolutionFunctions.applyFilter(filter, image);
+            var result = ConvolutionFunctions.applyFilterDataParallel(filter, image, ProcessorCount);
             Assert.AreEqual(5, result.GetLength(0));
             Assert.AreEqual(5, result.GetLength(1));
         }
         [TestMethod]
-        public void ApplyFilter_IdentityKernel_ReturnsOriginalImage()
+        public void ApplyFilterDataParallel_IdentityKernel_ReturnsOriginalImage()
         {
             byte[,] image = new byte[5, 5]
             {
@@ -95,7 +97,7 @@ namespace ImageEditorLib.Tests
                 { 0, 1, 0 },
                 { 0, 0, 0 }
             };
-            var result = ConvolutionFunctions.applyFilter(identity, image);
+            var result = ConvolutionFunctions.applyFilterDataParallel(identity, image, ProcessorCount);
             for (int i = 0; i < 5; i++)
             {
                 for (int j = 0; j < 5; j++)
@@ -105,7 +107,7 @@ namespace ImageEditorLib.Tests
             }
         }
         [TestMethod]
-        public void ApplyFilter_GaussianBlur_MakesImageSmoother()
+        public void ApplyFilterDataParallel_GaussianBlur_MakesImageSmoother()
         {
             byte[,] image = new byte[3, 3]
             {
@@ -113,11 +115,11 @@ namespace ImageEditorLib.Tests
                 { 0, 255, 0 },
                 { 0, 0, 0 }
             };
-            var result = ConvolutionFunctions.applyFilter(Kernels.gaussianBlurKernel, image);
+            var result = ConvolutionFunctions.applyFilterDataParallel(Kernels.gaussianBlurKernel, image, ProcessorCount);
             Assert.IsTrue(result[1, 1] < 255);
         }
         [TestMethod]
-        public void ApplyFilter_EdgeKernel_DetectsEdges()
+        public void ApplyFilterDataParallel_EdgeKernel_DetectsEdges()
         {
             byte[,] image = new byte[5, 5]
             {
@@ -127,11 +129,11 @@ namespace ImageEditorLib.Tests
                 { 0, 0, 0, 0, 0 },
                 { 0, 0, 0, 0, 0 }
             };
-            var result = ConvolutionFunctions.applyFilter(Kernels.egdeKernel, image);
+            var result = ConvolutionFunctions.applyFilterDataParallel(Kernels.egdeKernel, image, ProcessorCount);
             Assert.AreNotEqual(0, result[2, 2]);
         }
         [TestMethod]
-        public void ApplyFilter_SmallKernelOnLargeImage_Works()
+        public void ApplyFilterDataParallel_SmallKernelOnLargeImage_Works()
         {
             byte[,] image = new byte[100, 100];
             float[,] filter = new float[,]
@@ -140,9 +142,128 @@ namespace ImageEditorLib.Tests
                 { 2, 4, 2 },
                 { 1, 2, 1 }
             };
-            var result = ConvolutionFunctions.applyFilter(filter, image);
+            var result = ConvolutionFunctions.applyFilterDataParallel(filter, image, ProcessorCount);
             Assert.AreEqual(100, result.GetLength(0));
             Assert.AreEqual(100, result.GetLength(1));
+        }
+        [TestMethod]
+        public void ApplyFilterDataParallel_MatchesAgentImplementations()
+        {
+            byte[,] image = new byte[64, 64];
+            for (int i = 0; i < 64; i++)
+            {
+                for (int j = 0; j < 64; j++)
+                {
+                    image[i, j] = (byte)((i * 7 + j * 3) % 256);
+                }
+            }
+            var dataResult = ConvolutionFunctions.applyFilterDataParallel(Kernels.gaussianBlurKernel, image, ProcessorCount);
+            var agentResult = ConvolutionFunctions.applyFilterAgents(Kernels.gaussianBlurKernel, image, ProcessorCount);
+            for (int i = 0; i < 64; i++)
+            {
+                for (int j = 0; j < 64; j++)
+                {
+                    Assert.AreEqual(dataResult[i, j], agentResult[i, j]);
+                }
+            }
+        }
+    }
+    [TestClass]
+    public class ConvolutionFunctionsAgentTests
+    {
+        private const int AgentCount = 4;
+
+        [TestMethod]
+        public void ApplyFilterAgents_ReturnsCorrectDimensions()
+        {
+            byte[,] image = new byte[5, 5];
+            float[,] filter = new float[,]
+            {
+                { 0, 0, 0 },
+                { 0, 1, 0 },
+                { 0, 0, 0 }
+            };
+            var result = ConvolutionFunctions.applyFilterAgents(filter, image, AgentCount);
+            Assert.AreEqual(5, result.GetLength(0));
+            Assert.AreEqual(5, result.GetLength(1));
+        }
+        [TestMethod]
+        public void ApplyFilterAgents_IdentityKernel_ReturnsOriginalImage()
+        {
+            byte[,] image = new byte[5, 5]
+            {
+                { 10, 20, 30, 40, 50 },
+                { 60, 70, 80, 90, 100 },
+                { 110, 120, 130, 140, 150 },
+                { 160, 170, 180, 190, 200 },
+                { 210, 220, 230, 240, 250 }
+            };
+            float[,] identity = new float[,]
+            {
+                { 0, 0, 0 },
+                { 0, 1, 0 },
+                { 0, 0, 0 }
+            };
+            var result = ConvolutionFunctions.applyFilterAgents(identity, image, AgentCount);
+            for (int i = 0; i < 5; i++)
+            {
+                for (int j = 0; j < 5; j++)
+                {
+                    Assert.AreEqual(image[i, j], result[i, j]);
+                }
+            }
+        }
+        [TestMethod]
+        public void ApplyFilterAgents_GaussianBlur_MakesImageSmoother()
+        {
+            byte[,] image = new byte[3, 3]
+            {
+                { 0, 0, 0 },
+                { 0, 255, 0 },
+                { 0, 0, 0 }
+            };
+            var result = ConvolutionFunctions.applyFilterAgents(Kernels.gaussianBlurKernel, image, AgentCount);
+            Assert.IsTrue(result[1, 1] < 255);
+        }
+        [TestMethod]
+        public void ApplyFilterAgents_EdgeKernel_DetectsEdges()
+        {
+            byte[,] image = new byte[5, 5]
+            {
+                { 0, 0, 0, 0, 0 },
+                { 0, 0, 0, 0, 0 },
+                { 0, 0, 255, 0, 0 },
+                { 0, 0, 0, 0, 0 },
+                { 0, 0, 0, 0, 0 }
+            };
+            var result = ConvolutionFunctions.applyFilterAgents(Kernels.egdeKernel, image, AgentCount);
+            Assert.AreNotEqual(0, result[2, 2]);
+        }
+        [TestMethod]
+        public void ApplyFilterAgents_SmallKernelOnLargeImage_Works()
+        {
+            byte[,] image = new byte[100, 100];
+            float[,] filter = new float[,]
+            {
+                { 1, 2, 1 },
+                { 2, 4, 2 },
+                { 1, 2, 1 }
+            };
+            var result = ConvolutionFunctions.applyFilterAgents(filter, image, AgentCount);
+            Assert.AreEqual(100, result.GetLength(0));
+            Assert.AreEqual(100, result.GetLength(1));
+        }
+        [TestMethod]
+        public void ApplyFilterAgents_HandComputedGaussianCenterPixel()
+        {
+            byte[,] image = new byte[3, 3]
+            {
+                { 0, 0, 0 },
+                { 0, 255, 0 },
+                { 0, 0, 0 }
+            };
+            var result = ConvolutionFunctions.applyFilterAgents(Kernels.gaussianBlurKernel, image, AgentCount);
+            Assert.AreEqual(95, result[1, 1]);
         }
     }
     [TestClass]

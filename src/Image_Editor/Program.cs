@@ -56,6 +56,22 @@ class Program
             }
         }
 
+        Console.WriteLine("Choose processing mode:\n 1: Data parallelism\n 2: Agent parallelism");
+        string? mode = Console.ReadLine();
+        bool useAgents = mode == "1";
+        
+        int processorCount = 1;
+        Console.WriteLine("Enter process/agent count");
+        try
+        {
+            processorCount = int.Parse(Console.ReadLine() ?? "");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"It is not a number: {ex.Message}");
+            return -1;
+        }
+
         for (int i = 0; i < files.Length; i++)
         {
             string filename = files[i];
@@ -63,7 +79,9 @@ class Program
             try
             {
                 byte[,] image = IOImage.LoadAs2DArray(filename);
-                byte[,] res = ConvolutionFunctions.applyFilter(filters[filterIndex], image);
+                byte[,] res = useAgents
+                    ? ConvolutionFunctions.applyFilterDataParallel(filters[filterIndex], image, processorCount)
+                    : ConvolutionFunctions.applyFilterAgents(filters[filterIndex], image, processorCount);
 
                 string outName = Path.Combine(
                     Path.GetDirectoryName(filename) ?? ".",

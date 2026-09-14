@@ -1,7 +1,10 @@
 ﻿namespace Image_Editor_lib;
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
 using System.Xml.Linq;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
@@ -101,42 +104,72 @@ public class Kernels
 }
 public class ConvolutionFunctions
 {
-    public static byte[,] applyFilter(float[,] filter, byte[,] image) 
+    public static byte[,] applyFilterDataParallel(float[,] filter, byte[,] image, int processorCount)
     {
         var imgH = image.GetLength(0);
         var imgW = image.GetLength(1);
-
         var filterD = filter.GetLength(0) / 2;
 
         byte[,] result = new byte[imgH, imgW];
 
-        byte processPixel(int px, int py)
+        var options = new ParallelOptions { MaxDegreeOfParallelism = processorCount};
+        Parallel.For(0, imgH, options, y =>
         {
-            float sum = 0;
-            for (int i = px - filterD; i <= px + filterD; i++)
+            for (int x = 0; x < imgW; x++)
             {
-                for (int j = py - filterD; j <= py + filterD; j++)
+                result[y, x] = ProcessPixel(filter, image, y, x, imgH, imgW, filterD);
+            }
+        });
+
+        return result;
+    }
+
+    public static byte[,] applyFilterAgents(float[,] filter, byte[,] image, int agentCount)
+    {
+        var imgH = image.GetLength(0);
+        var imgW = image.GetLength(1);
+        var filterD = filter.GetLength(0) / 2;
+
+        byte[,] result = new byte[imgH, imgW];
+
+        var pendingRows = new ConcurrentQueue<int>(Enumerable.Range(0, imgH));
+
+        var agents = new Task[agentCount];
+        for (int i = 0; i < agentCount; i++)
+        {
+            agents[i] = Task.Run(() =>
+            {
+                while (pendingRows.TryDequeue(out int y))
                 {
-                    if (i < 0 || i >= imgH || j < 0 || j >= imgW)
+                    for (int x = 0; x < imgW; x++)
                     {
-                        sum += image[px, py] * filter[i - px + filterD, j - py + filterD];
-                    }
-                    else
-                    {
-                        sum += image[i, j] * filter[i - px + filterD, j - py + filterD];
+                        result[y, x] = ProcessPixel(filter, image, y, x, imgH, imgW, filterD);
                     }
                 }
-            }
-            return (byte)Math.Clamp(sum, 0, 255);
+            });
         }
 
-        for (int i = 0; i < imgH; i++)
+        Task.WaitAll(agents);
+        return result;
+    }
+
+    private static byte ProcessPixel(float[,] filter, byte[,] image, int px, int py, int imgH, int imgW, int filterD)
+    {
+        float sum = 0;
+        for (int i = px - filterD; i <= px + filterD; i++)
         {
-            for (int j = 0; j < imgW; j++)
+            for (int j = py - filterD; j <= py + filterD; j++)
             {
-                result[i,j] = processPixel(i, j);
+                if (i < 0 || i >= imgH || j < 0 || j >= imgW)
+                {
+                    sum += image[px, py] * filter[i - px + filterD, j - py + filterD];
+                }
+                else
+                {
+                    sum += image[i, j] * filter[i - px + filterD, j - py + filterD];
+                }
             }
         }
-        return result;
+        return (byte)Math.Clamp(sum, 0, 255);
     }
 }
