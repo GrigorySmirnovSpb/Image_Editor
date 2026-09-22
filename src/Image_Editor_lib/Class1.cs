@@ -124,35 +124,6 @@ public class ConvolutionFunctions
         return result;
     }
 
-    public static byte[,] applyFilterAgents(float[,] filter, byte[,] image, int agentCount)
-    {
-        var imgH = image.GetLength(0);
-        var imgW = image.GetLength(1);
-        var filterD = filter.GetLength(0) / 2;
-
-        byte[,] result = new byte[imgH, imgW];
-
-        var pendingRows = new ConcurrentQueue<int>(Enumerable.Range(0, imgH));
-
-        var agents = new Task[agentCount];
-        for (int i = 0; i < agentCount; i++)
-        {
-            agents[i] = Task.Run(() =>
-            {
-                while (pendingRows.TryDequeue(out int y))
-                {
-                    for (int x = 0; x < imgW; x++)
-                    {
-                        result[y, x] = ProcessPixel(filter, image, y, x, imgH, imgW, filterD);
-                    }
-                }
-            });
-        }
-
-        Task.WaitAll(agents);
-        return result;
-    }
-
     private static byte ProcessPixel(float[,] filter, byte[,] image, int px, int py, int imgH, int imgW, int filterD)
     {
         float sum = 0;
@@ -171,5 +142,127 @@ public class ConvolutionFunctions
             }
         }
         return (byte)Math.Clamp(sum, 0, 255);
+    }
+
+    public static int ProcessByData(string[] files, List<float[,]> filters, int processorCount)
+    {
+        int n = files.Length;
+        byte[][,] images = new byte[n][,];
+        byte[][,] results = new byte[n][,];
+
+        try
+        {
+            Parallel.For(0, n, new ParallelOptions { MaxDegreeOfParallelism = processorCount }, i =>
+            {
+                images[i] = IOImage.LoadAs2DArray(files[i]);
+            });
+
+            Parallel.For(0, n, new ParallelOptions { MaxDegreeOfParallelism = processorCount }, i =>
+            {
+                int filterIndex = Math.Min(i, filters.Count - 1);
+                results[i] = ConvolutionFunctions.applyFilterDataParallel(filters[filterIndex], images[i], processorCount);
+            });
+
+            Parallel.For(0, n, new ParallelOptions { MaxDegreeOfParallelism = processorCount }, i =>
+            {
+                string outName = Path.Combine(
+                    Path.GetDirectoryName(files[i]) ?? ".",
+                    Path.GetFileNameWithoutExtension(files[i]) + "_out.png");
+                IOImage.Save2DbyteArrayAsImage(results[i], outName);
+                Console.WriteLine($"Saved: {outName}");
+            });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Could not process: {ex.Message}");
+            return -1;
+        }
+
+        return 0;
+    }
+
+    public static int ProcessByTasks(string[] files, List<float[,]> filters, int agentCount)
+    {
+        int n = files.Length;
+        int readerCount = Math.Max(1, agentCount / 2);
+        int writerCount = Math.Max(1, agentCount / 2);
+
+        var pendingFiles = new ConcurrentQueue<int>(Enumerable.Range(0, n));
+        var toProcess = new BlockingCollection<(byte[,] Image, float[,] Filter, string OutName)>(agentCount * 2);
+        var toWrite = new BlockingCollection<(byte[,] Result, string OutName)>(agentCount * 2);
+
+        try
+        {
+            var readers = new Task[readerCount];
+            for (int r = 0; r < readerCount; r++)
+            {
+                int local_r = r;
+                readers[local_r] = Task.Run(() =>
+                {
+                    while (pendingFiles.TryDequeue(out int i))
+                    {
+                        byte[,] image = IOImage.LoadAs2DArray(files[i]);
+                        int filterIndex = Math.Min(i, filters.Count - 1);
+                        string outName = Path.Combine(
+                            Path.GetDirectoryName(files[i]) ?? ".",
+                            Path.GetFileNameWithoutExtension(files[i]) + "_out.png");
+                        toProcess.Add((image, filters[filterIndex], outName));
+                    }
+                });
+            }
+
+            var workers = new Task[agentCount];
+            for (int w = 0; w < agentCount; w++)
+            {
+                int local_w = w;
+                workers[local_w ] = Task.Run(() =>
+                {
+                    foreach ((byte[,] Image, float[,] Filter, string OutName) item in toProcess.GetConsumingEnumerable())
+                    {
+                        byte[,] result = ConvolutionFunctions.applyFilterDataParallel(item.Filter, item.Image, agentCount);
+                        toWrite.Add((result, item.OutName));
+                    }
+                });
+            }
+
+            var writers = new Task[writerCount];
+            for (int w = 0; w < writerCount; w++)
+            {
+                int local_w = w;
+                writers[local_w ] = Task.Run(() =>
+                {
+                    foreach ((byte[,] Result, string OutName) item in toWrite.GetConsumingEnumerable())
+                    {
+                        IOImage.Save2DbyteArrayAsImage(item.Result, item.OutName);
+                        Console.WriteLine($"Saved: {item.OutName}");
+                    }
+                });
+            }
+
+            try
+            {
+                Task.WaitAll(readers);
+            }
+            finally
+            {
+                toProcess.CompleteAdding();
+            }
+            try
+            {
+                Task.WaitAll(workers);
+            }
+            finally
+            {
+                toWrite.CompleteAdding();
+            }
+            Task.WaitAll(writers);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Could not process: {ex.Message}");
+            return -1;
+        }
+
+        return 0;
     }
 }

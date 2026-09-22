@@ -1,5 +1,6 @@
 ﻿using Image_Editor_lib;
 using System;
+using System.Collections.Concurrent;
 
 class Program
 {
@@ -56,46 +57,34 @@ class Program
             }
         }
 
-        Console.WriteLine("Choose processing mode:\n 1: Data parallelism\n 2: Agent parallelism");
+        Console.WriteLine("Choose processing mode:\n 1: Data parallelism\n 2: Task parallelism (agents)");
         string? mode = Console.ReadLine();
-        bool useAgents = mode == "1";
-        
-        int processorCount = 1;
+        bool useTasks = mode == "2";
+
         Console.WriteLine("Enter process/agent count");
+        int parallelismCount;
         try
         {
-            processorCount = int.Parse(Console.ReadLine() ?? "");
+            parallelismCount = int.Parse(Console.ReadLine() ?? "");
         }
         catch (Exception ex)
         {
             Console.WriteLine($"It is not a number: {ex.Message}");
             return -1;
         }
-
-        for (int i = 0; i < files.Length; i++)
+        if (parallelismCount < 1)
         {
-            string filename = files[i];
-            int filterIndex = Math.Min(i, filters.Count - 1);
-            try
-            {
-                byte[,] image = IOImage.LoadAs2DArray(filename);
-                byte[,] res = useAgents
-                    ? ConvolutionFunctions.applyFilterDataParallel(filters[filterIndex], image, processorCount)
-                    : ConvolutionFunctions.applyFilterAgents(filters[filterIndex], image, processorCount);
-
-                string outName = Path.Combine(
-                    Path.GetDirectoryName(filename) ?? ".",
-                    Path.GetFileNameWithoutExtension(filename) + "_out.png");
-                IOImage.Save2DbyteArrayAsImage(res, outName);
-                Console.WriteLine($"Saved: {outName}");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Could not apply filter to {filename}: {ex.Message}");
-                return -1;
-            }
+            Console.WriteLine("Count must be positive");
+            return -1;
         }
 
-        return 0;
+        if (useTasks)
+        {
+            return ConvolutionFunctions.ProcessByTasks(files, filters, parallelismCount);
+        }
+        else
+        {
+            return ConvolutionFunctions.ProcessByData(files, filters, parallelismCount);
+        }
     }
 }
