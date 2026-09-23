@@ -1,5 +1,8 @@
 ﻿using Image_Editor_lib;
+using ILGPU;
+using ILGPU.Runtime;
 using System;
+using System.Linq;
 
 class Program
 {
@@ -56,6 +59,12 @@ class Program
             }
         }
 
+        using var context = Context.CreateDefault();
+        Device device = context.Devices.FirstOrDefault(d => d.AcceleratorType == AcceleratorType.OpenCL) ?? context.Devices[0];
+        using var accelerator = device.CreateAccelerator(context);
+
+        Console.WriteLine($"AcceleratorType:{accelerator.AcceleratorType}\nAccelerator.Device:{accelerator.Device.Name}");
+        
         for (int i = 0; i < files.Length; i++)
         {
             string filename = files[i];
@@ -63,7 +72,7 @@ class Program
             try
             {
                 byte[,] image = IOImage.LoadAs2DArray(filename);
-                byte[,] res = ConvolutionFunctions.applyFilter(filters[filterIndex], image);
+                byte[,] res = ConvolutionFunctions.applyFilter(filters[filterIndex], image, accelerator);
 
                 string outName = Path.Combine(
                     Path.GetDirectoryName(filename) ?? ".",

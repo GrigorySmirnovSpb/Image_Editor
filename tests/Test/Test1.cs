@@ -1,31 +1,36 @@
-﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
-using Image_Editor_lib;
+﻿using Image_Editor_lib;
+using ILGPU;
+using ILGPU.Runtime;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+using System;
 using System.IO;
+using System.Linq;
+
 namespace ImageEditorLib.Tests
 {
-    [TestClass]
-    public class MyImageTests
+    internal static class TestAccelerator
     {
-        [TestMethod]
-        public void Constructor_SetsProperties_Correctly()
+        private static readonly object Sync = new();
+        private static Context? _context;
+        private static Accelerator? _accelerator;
+
+        public static Accelerator Create()
         {
-            int width = 100;
-            int height = 200;
-            byte[] data = new byte[100 * 200];
-            string name = "test.png";
-            var image = new myImage(width, height, data, name);
-            Assert.AreEqual(width, image.Width);
-            Assert.AreEqual(height, image.Height);
-            Assert.AreEqual(data, image.Data);
-            Assert.AreEqual(name, image.Name);
-        }
-        [TestMethod]
-        public void Data_DefaultIsNull()
-        {
-            var image = new myImage(10, 10, null!, "test");
-            Assert.IsNull(image.Data);
+            lock (Sync)
+            {
+                if (_accelerator is not null)
+                    return _accelerator;
+
+                _context ??= Context.CreateDefault();
+                Device device = _context.Devices
+                    .FirstOrDefault(d => d.AcceleratorType == AcceleratorType.OpenCL)
+                    ?? _context.Devices[0];
+                _accelerator = device.CreateAccelerator(_context);
+                return _accelerator;
+            }
         }
     }
+
     [TestClass]
     public class KernelsTests
     {
@@ -35,25 +40,24 @@ namespace ImageEditorLib.Tests
             Assert.AreEqual(5, Kernels.gaussianBlurKernel.GetLength(0));
             Assert.AreEqual(5, Kernels.gaussianBlurKernel.GetLength(1));
         }
+
         [TestMethod]
         public void GaussianBlurKernel_SumEqualsOne()
         {
             float sum = 0;
-            for (int i = 0; i < 5; i++)
-            {
-                for (int j = 0; j < 5; j++)
-                {
+            for (int i = 0; i < Kernels.gaussianBlurKernel.GetLength(0); i++)
+                for (int j = 0; j < Kernels.gaussianBlurKernel.GetLength(1); j++)
                     sum += Kernels.gaussianBlurKernel[i, j];
-                }
-            }
             Assert.AreEqual(1f, sum, 0.001f);
         }
+
         [TestMethod]
         public void EdgeKernel_HasCorrectSize()
         {
             Assert.AreEqual(5, Kernels.egdeKernel.GetLength(0));
             Assert.AreEqual(5, Kernels.egdeKernel.GetLength(1));
         }
+
         [TestMethod]
         public void ScaryKernel_HasCorrectSize()
         {
@@ -61,23 +65,31 @@ namespace ImageEditorLib.Tests
             Assert.AreEqual(3, Kernels.scaryKernel.GetLength(1));
         }
     }
+
     [TestClass]
     public class ConvolutionFunctionsTests
     {
+        private static readonly Accelerator Accelerator = TestAccelerator.Create();
+
+        private static byte[,] ApplyFilter(float[,] filter, byte[,] image) =>
+            ConvolutionFunctions.applyFilter(filter, image, Accelerator);
+
+        private static float[,] Identity3x3() => new float[,]
+        {
+            { 0, 0, 0 },
+            { 0, 1, 0 },
+            { 0, 0, 0 }
+        };
+
         [TestMethod]
         public void ApplyFilter_ReturnsCorrectDimensions()
         {
-            byte[,] image = new byte[5, 5];
-            float[,] filter = new float[,]
-            {
-                { 0, 0, 0 },
-                { 0, 1, 0 },
-                { 0, 0, 0 }
-            };
-            var result = ConvolutionFunctions.applyFilter(filter, image);
+            byte[,] image = new byte[5, 7];
+            var result = ApplyFilter(Identity3x3(), image);
             Assert.AreEqual(5, result.GetLength(0));
-            Assert.AreEqual(5, result.GetLength(1));
+            Assert.AreEqual(7, result.GetLength(1));
         }
+
         [TestMethod]
         public void ApplyFilter_IdentityKernel_ReturnsOriginalImage()
         {
@@ -89,62 +101,106 @@ namespace ImageEditorLib.Tests
                 { 160, 170, 180, 190, 200 },
                 { 210, 220, 230, 240, 250 }
             };
-            float[,] identity = new float[,]
-            {
-                { 0, 0, 0 },
-                { 0, 1, 0 },
-                { 0, 0, 0 }
-            };
-            var result = ConvolutionFunctions.applyFilter(identity, image);
-            for (int i = 0; i < 5; i++)
-            {
-                for (int j = 0; j < 5; j++)
-                {
+            var result = ApplyFilter(Identity3x3(), image);
+            for (int i = 0; i < image.GetLength(0); i++)
+                for (int j = 0; j < image.GetLength(1); j++)
                     Assert.AreEqual(image[i, j], result[i, j]);
-                }
-            }
         }
+
         [TestMethod]
-        public void ApplyFilter_GaussianBlur_MakesImageSmoother()
+        public void ApplyFilter_Identity_PreservesImpulsePosition_OnNonSquareImage()
         {
-            byte[,] image = new byte[3, 3]
-            {
-                { 0, 0, 0 },
-                { 0, 255, 0 },
-                { 0, 0, 0 }
-            };
-            var result = ConvolutionFunctions.applyFilter(Kernels.gaussianBlurKernel, image);
-            Assert.IsTrue(result[1, 1] < 255);
+            byte[,] image = new byte[6, 10];
+            image[3, 7] = 255;
+
+            var result = ApplyFilter(Identity3x3(), image);
+
+            double total = 0;
+            for (int i = 0; i < result.GetLength(0); i++)
+                for (int j = 0; j < result.GetLength(1); j++)
+                    total += result[i, j];
+
+            Assert.AreEqual(255, result[3, 7]);
+            Assert.AreEqual(255.0, total);
         }
+
+        [TestMethod]
+        public void ApplyFilter_GaussianBlur_BlursImpulse()
+        {
+            byte[,] image = new byte[7, 7];
+            image[3, 3] = 255;
+
+            var result = ApplyFilter(Kernels.gaussianBlurKernel, image);
+
+            Assert.IsTrue(result[3, 3] < 255, "Center should lose brightness");
+            Assert.IsTrue(result[3, 3] > 0, "Center should keep some brightness");
+            Assert.IsTrue(result[3, 4] > 0, "Neighbor should receive brightness");
+            Assert.IsTrue(result[1, 3] > 0, "Far neighbor should receive brightness");
+        }
+
         [TestMethod]
         public void ApplyFilter_EdgeKernel_DetectsEdges()
         {
-            byte[,] image = new byte[5, 5]
-            {
-                { 0, 0, 0, 0, 0 },
-                { 0, 0, 0, 0, 0 },
-                { 0, 0, 255, 0, 0 },
-                { 0, 0, 0, 0, 0 },
-                { 0, 0, 0, 0, 0 }
-            };
-            var result = ConvolutionFunctions.applyFilter(Kernels.egdeKernel, image);
-            Assert.AreNotEqual(0, result[2, 2]);
+            byte[,] image = new byte[5, 5];
+            image[2, 2] = 255;
+
+            var result = ApplyFilter(Kernels.egdeKernel, image);
+
+            Assert.AreEqual(255, result[2, 2]);
         }
+
         [TestMethod]
-        public void ApplyFilter_SmallKernelOnLargeImage_Works()
+        public void ApplyFilter_ClampsTo255_HighWeights()
         {
-            byte[,] image = new byte[100, 100];
-            float[,] filter = new float[,]
+            byte[,] image = new byte[5, 5];
+            for (int i = 0; i < 5; i++)
+                for (int j = 0; j < 5; j++)
+                    image[i, j] = 255;
+
+            float[,] heavy = new float[,]
             {
-                { 1, 2, 1 },
-                { 2, 4, 2 },
-                { 1, 2, 1 }
+                { 10, 10, 10 },
+                { 10, 10, 10 },
+                { 10, 10, 10 }
             };
-            var result = ConvolutionFunctions.applyFilter(filter, image);
+            var result = ApplyFilter(heavy, image);
+
+            for (int i = 0; i < 5; i++)
+                for (int j = 0; j < 5; j++)
+                    Assert.AreEqual(255, result[i, j], "Result must not overflow");
+        }
+
+        [TestMethod]
+        public void ApplyFilter_ClampsTo0_NegativeWeights()
+        {
+            byte[,] image = new byte[5, 5];
+            for (int i = 0; i < 5; i++)
+                for (int j = 0; j < 5; j++)
+                    image[i, j] = 255;
+
+            float[,] negative = new float[,]
+            {
+                { -1, -1, -1 },
+                { -1, -1, -1 },
+                { -1, -1, -1 }
+            };
+            var result = ApplyFilter(negative, image);
+
+            for (int i = 0; i < 5; i++)
+                for (int j = 0; j < 5; j++)
+                    Assert.AreEqual(0, result[i, j], "Result must not underflow");
+        }
+
+        [TestMethod]
+        public void ApplyFilter_LargeImage_ReturnsCorrectDimensions()
+        {
+            byte[,] image = new byte[100, 60];
+            var result = ApplyFilter(Kernels.scaryKernel, image);
             Assert.AreEqual(100, result.GetLength(0));
-            Assert.AreEqual(100, result.GetLength(1));
+            Assert.AreEqual(60, result.GetLength(1));
         }
     }
+
     [TestClass]
     public class IOImageTests
     {
@@ -152,57 +208,36 @@ namespace ImageEditorLib.Tests
         public void LoadAs2DArray_ThrowsOnNonExistentFile()
         {
             Assert.ThrowsException<FileNotFoundException>(
-                () => IOImage.LoadAs2DArray("nonexistent_file.png")
-            );
+                () => IOImage.LoadAs2DArray("nonexistent_file.png"));
         }
+
         [TestMethod]
-        public void LoadAsImage_ThrowsOnNonExistentFile()
+        public void SaveThenLoad_RoundtripsPixels_OnNonSquareImage()
         {
-            Assert.ThrowsException<FileNotFoundException>(
-                () => IOImage.LoadAsImage("nonexistent_file.png")
-            );
-        }
-        [TestMethod]
-        public void Save2DbyteArrayAsImage_CreatesFile()
-        {
-            byte[,] data = new byte[10, 10];
-            string tempPath = Path.Combine(Path.GetTempPath(), "test_output.png");
+            byte[,] data = new byte[4, 6]
+            {
+                { 10, 20, 30, 40, 50, 60 },
+                { 70, 80, 90, 100, 110, 120 },
+                { 130, 140, 150, 60, 170, 180 },
+                { 190, 200, 210, 220, 230, 240 }
+            };
+            string tempPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString() + ".png");
             try
             {
                 IOImage.Save2DbyteArrayAsImage(data, tempPath);
-                Assert.IsTrue(File.Exists(tempPath));
+                byte[,] loaded = IOImage.LoadAs2DArray(tempPath);
+
+                Assert.AreEqual(4, loaded.GetLength(0));
+                Assert.AreEqual(6, loaded.GetLength(1));
+                for (int i = 0; i < 4; i++)
+                    for (int j = 0; j < 6; j++)
+                        Assert.AreEqual(data[i, j], loaded[i, j]);
             }
             finally
             {
                 if (File.Exists(tempPath))
                     File.Delete(tempPath);
             }
-        }
-        [TestMethod]
-        public void LoadAsImage_Equal_LoadAs2DArray()
-        {
-            byte[,] data = new byte[4, 5]
-            {
-                { 10, 20, 30, 40, 50 },
-                { 60, 70, 80, 90, 100 },
-                { 110, 120, 130, 140, 150 },
-                { 160, 170, 180, 190, 200 },
-            };
-            IOImage.Save2DbyteArrayAsImage(data, "test.png");
-            var resultArray = IOImage.LoadAs2DArray("test.png");
-            var resultImage = IOImage.LoadAsImage("test.png");
-            Assert.AreEqual(resultImage.Height, resultArray.GetLength(0));
-            Assert.AreEqual(resultImage.Width, resultArray.GetLength(1));
-            for (int i = 0; i < resultArray.GetLength(0); i++)
-            {
-                for (int j = 0; j < resultArray.GetLength(1); j++)
-                {
-                    Assert.AreEqual(resultArray[i, j], resultImage.Data[i * resultArray.GetLength(1) + j]);
-                }
-            }
-            string tempPath = Path.Combine(Path.GetTempPath(), "test_output.png");
-            if (File.Exists(tempPath))
-                    File.Delete(tempPath);
         }
     }
 }

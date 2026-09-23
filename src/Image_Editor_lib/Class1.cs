@@ -5,21 +5,9 @@ using System.IO;
 using System.Xml.Linq;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
+using ILGPU;
+using ILGPU.Runtime;
 
-public class myImage
-{
-    public int Width { get; set; }
-    public int Height { get; set; }
-    public byte[] Data { get; set; }
-    public string Name { get; set; }
-    public myImage(int  width, int height, byte [] data, string name)
-    {
-        Width = width;
-        Height = height;
-        Data = data;
-        Name = name;
-    }
-}
 
 public class IOImage
 {
@@ -37,20 +25,7 @@ public class IOImage
         }
         return result;
     }
-    public static myImage LoadAsImage (string filename)
-    {
-        var img = Image.Load<L8> (filename);
-        byte[] buf = new byte[img.Width * img.Height];
-        int index  = 0;
-        for (int i = 0; i < img.Height; i++)
-        {
-            for (int j = 0; j < img.Width; j++)
-            {
-                buf[index++] = img[j,i].PackedValue;
-            }
-        }
-        return new myImage(img.Width, img.Height, buf, filename);
-    }
+
     public static void Save2DbyteArrayAsImage(byte [,] imagedata, string filename)
     {
         var h = imagedata.GetLength(0);
@@ -66,11 +41,6 @@ public class IOImage
             }
         }
         var img = Image.LoadPixelData<L8>(flatArray, w, h);
-        img.Save(filename);
-    }
-    public static void SaveImage (myImage image, string filename)
-    {
-        var img = Image.LoadPixelData<L8>(image.Data, image.Width, image.Height);
         img.Save(filename);
     }
 }
@@ -101,42 +71,76 @@ public class Kernels
 }
 public class ConvolutionFunctions
 {
-    public static byte[,] applyFilter(float[,] filter, byte[,] image) 
+    public static byte[,] applyFilter(float[,] filter, byte[,] image, Accelerator accelerator) 
     {
         var imgH = image.GetLength(0);
         var imgW = image.GetLength(1);
 
         var filterD = filter.GetLength(0) / 2;
+        var filterSize = filter.GetLength(0);
+
+        float[] source = new float[imgH * imgW];
+
+        for (int y = 0; y < imgH; y++)
+        {
+            for (int x = 0; x < imgW; x++)
+            {
+                source[y * imgW + x] = image[y, x];
+            }
+        }
+        
+        float[] flatFilter = new float[filterSize * filterSize];
+        Buffer.BlockCopy(filter, 0, flatFilter, 0, flatFilter.Length * sizeof(float));
+
+        using var buffer = accelerator.Allocate1D<float>(source.Length);
+        using var filterBuffer = accelerator.Allocate1D<float>(flatFilter.Length);
+        using var resultBuffer = accelerator.Allocate1D<float>(source.Length);
+        buffer.CopyFromCPU(source);
+        filterBuffer.CopyFromCPU(flatFilter);
+
+        var kernel = accelerator.LoadAutoGroupedKernel<
+            Action<AcceleratorStream, Index2D, ArrayView<float>, ArrayView<float>, int, int, ArrayView<float>, int>,
+            Action<Index2D, ArrayView<float>, ArrayView<float>, int, int, ArrayView<float>, int>>(processPixelGPU);
+        kernel(accelerator.DefaultStream, new Index2D(imgW, imgH), buffer.View, resultBuffer.View, imgH, imgW, filterBuffer.View, filterD);
+
+        accelerator.Synchronize();
+
+        float[] dst = new float[source.Length];
+        resultBuffer.CopyToCPU(dst);
 
         byte[,] result = new byte[imgH, imgW];
-
-        byte processPixel(int px, int py)
+        for (int y = 0; y < imgH; y++)
         {
-            float sum = 0;
-            for (int i = px - filterD; i <= px + filterD; i++)
+            for (int x = 0; x < imgW; x++)
             {
-                for (int j = py - filterD; j <= py + filterD; j++)
-                {
-                    if (i < 0 || i >= imgH || j < 0 || j >= imgW)
-                    {
-                        sum += image[px, py] * filter[i - px + filterD, j - py + filterD];
-                    }
-                    else
-                    {
-                        sum += image[i, j] * filter[i - px + filterD, j - py + filterD];
-                    }
-                }
-            }
-            return (byte)Math.Clamp(sum, 0, 255);
-        }
-
-        for (int i = 0; i < imgH; i++)
-        {
-            for (int j = 0; j < imgW; j++)
-            {
-                result[i,j] = processPixel(i, j);
+                result[y, x] = (byte)Math.Clamp(dst[y * imgW + x], 0, 255);
             }
         }
         return result;
+    }
+
+    private static void processPixelGPU(Index2D index, ArrayView<float> input, ArrayView<float> output, int imgH, int imgW, ArrayView<float> filter, int filterD)
+    {
+        var px = index.Y;
+        var py = index.X;
+        var filterSize = filterD * 2 + 1;
+
+        float sum = 0;
+        for (int i = px - filterD; i <= px + filterD; i++)
+        {
+            for (int j = py - filterD; j <= py + filterD; j++)
+            {
+                var flatF = (i - px + filterD) * filterSize + (j - py + filterD);
+                if (i < 0 || i >= imgH || j < 0 || j >= imgW)
+                {
+                    sum += input[px * imgW + py] * filter[flatF];
+                }
+                else
+                {
+                    sum += input[i * imgW + j] * filter[flatF];
+                }
+            }
+        }
+        output[px * imgW + py] = sum < 0f ? 0f : (sum > 255f ? 255f : sum);
     }
 }
