@@ -1,7 +1,10 @@
 ﻿namespace Image_Editor_lib;
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
 using System.Xml.Linq;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
@@ -142,5 +145,113 @@ public class ConvolutionFunctions
             }
         }
         output[px * imgW + py] = sum < 0f ? 0f : (sum > 255f ? 255f : sum);
+    }
+
+    public static int ProcessByTasks(string[] files, List<float[,]> filters, int agentCount)
+    {
+        int n = files.Length;
+        int readerCount = Math.Max(1, agentCount / 2);
+        int writerCount = Math.Max(1, agentCount / 2);
+
+        var pendingFiles = new ConcurrentQueue<int>(Enumerable.Range(0, n));
+        var toProcess = new BlockingCollection<(byte[,] Image, float[,] Filter, string OutName)>(agentCount * 2);
+        var toWrite = new BlockingCollection<(byte[,] Result, string OutName)>(agentCount * 2);
+
+        var workers = new Task[agentCount];
+        try
+        {
+            Accelerator[] accelerators = new Accelerator[agentCount];
+            Context[] contexts = new Context[agentCount];
+            try
+            {
+                for (int a = 0; a < agentCount; a++)
+                {
+                    var context = Context.CreateDefault();
+                    Device device = context.Devices.FirstOrDefault(d => d.AcceleratorType == AcceleratorType.OpenCL) ?? context.Devices[0];
+                    contexts[a] = context;
+                    accelerators[a] = device.CreateAccelerator(context);
+
+                    applyFilter(Kernels.gaussianBlurKernel, new byte[8, 8], accelerators[a]);
+                }
+
+                var readers = new Task[readerCount];
+                for (int r = 0; r < readerCount; r++)
+                {
+                    int local_r = r;
+                    readers[local_r] = Task.Run(() =>
+                    {
+                        while (pendingFiles.TryDequeue(out int i))
+                        {
+                            byte[,] image = IOImage.LoadAs2DArray(files[i]);
+                            int filterIndex = Math.Min(i, filters.Count - 1);
+                            string outName = Path.Combine(
+                                Path.GetDirectoryName(files[i]) ?? ".",
+                                Path.GetFileNameWithoutExtension(files[i]) + "_out.png");
+                            toProcess.Add((image, filters[filterIndex], outName));
+                        }
+                    });
+                }
+
+                for (int w = 0; w < agentCount; w++)
+                {
+                    int local_w = w;
+                    workers[local_w] = Task.Run(() =>
+                    {
+                        foreach ((byte[,] Image, float[,] Filter, string OutName) item in toProcess.GetConsumingEnumerable())
+                        {
+                            byte[,] result = applyFilter(item.Filter, item.Image, accelerators[local_w]);
+                            toWrite.Add((result, item.OutName));
+                        }
+                    });
+                }
+
+                var writers = new Task[writerCount];
+                for (int w = 0; w < writerCount; w++)
+                {
+                    int local_w = w;
+                    writers[local_w] = Task.Run(() =>
+                    {
+                        foreach ((byte[,] Result, string OutName) item in toWrite.GetConsumingEnumerable())
+                        {
+                            IOImage.Save2DbyteArrayAsImage(item.Result, item.OutName);
+                            Console.WriteLine($"Saved: {item.OutName}");
+                        }
+                    });
+                }
+
+                try 
+                { 
+                    Task.WaitAll(readers); 
+                }
+                finally 
+                { 
+                    toProcess.CompleteAdding(); 
+                }
+                try 
+                { 
+                    Task.WaitAll(workers); 
+                }
+                finally 
+                { 
+                    toWrite.CompleteAdding(); 
+                }
+                    Task.WaitAll(writers);
+            }
+            finally
+            {
+                for (int a = 0; a < agentCount; a++)
+                {
+                    accelerators[a]?.Dispose();
+                    contexts[a]?.Dispose();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Could not process: {ex.Message}");
+            return -1;
+        }
+
+        return 0;
     }
 }

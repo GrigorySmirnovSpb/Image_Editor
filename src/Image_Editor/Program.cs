@@ -1,8 +1,5 @@
 ﻿using Image_Editor_lib;
-using ILGPU;
-using ILGPU.Runtime;
 using System;
-using System.Linq;
 
 class Program
 {
@@ -59,34 +56,23 @@ class Program
             }
         }
 
-        using var context = Context.CreateDefault();
-        Device device = context.Devices.FirstOrDefault(d => d.AcceleratorType == AcceleratorType.OpenCL) ?? context.Devices[0];
-        using var accelerator = device.CreateAccelerator(context);
-
-        Console.WriteLine($"AcceleratorType:{accelerator.AcceleratorType}\nAccelerator.Device:{accelerator.Device.Name}");
-        
-        for (int i = 0; i < files.Length; i++)
+        Console.WriteLine("Enter process/agent count");
+        int parallelismCount;
+        try
         {
-            string filename = files[i];
-            int filterIndex = Math.Min(i, filters.Count - 1);
-            try
-            {
-                byte[,] image = IOImage.LoadAs2DArray(filename);
-                byte[,] res = ConvolutionFunctions.applyFilter(filters[filterIndex], image, accelerator);
-
-                string outName = Path.Combine(
-                    Path.GetDirectoryName(filename) ?? ".",
-                    Path.GetFileNameWithoutExtension(filename) + "_out.png");
-                IOImage.Save2DbyteArrayAsImage(res, outName);
-                Console.WriteLine($"Saved: {outName}");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Could not apply filter to {filename}: {ex.Message}");
-                return -1;
-            }
+            parallelismCount = int.Parse(Console.ReadLine() ?? "");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"It is not a number: {ex.Message}");
+            return -1;
+        }
+        if (parallelismCount < 1)
+        {
+            Console.WriteLine("Count must be positive");
+            return -1;
         }
 
-        return 0;
+        return ConvolutionFunctions.ProcessByTasks(files, filters, parallelismCount);
     }
 }

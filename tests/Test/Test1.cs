@@ -82,15 +82,6 @@ namespace ImageEditorLib.Tests
         };
 
         [TestMethod]
-        public void ApplyFilter_ReturnsCorrectDimensions()
-        {
-            byte[,] image = new byte[5, 7];
-            var result = ApplyFilter(Identity3x3(), image);
-            Assert.AreEqual(5, result.GetLength(0));
-            Assert.AreEqual(7, result.GetLength(1));
-        }
-
-        [TestMethod]
         public void ApplyFilter_IdentityKernel_ReturnsOriginalImage()
         {
             byte[,] image = new byte[5, 5]
@@ -198,6 +189,155 @@ namespace ImageEditorLib.Tests
             var result = ApplyFilter(Kernels.scaryKernel, image);
             Assert.AreEqual(100, result.GetLength(0));
             Assert.AreEqual(60, result.GetLength(1));
+        }
+    }
+
+    [TestClass]
+    public class ProcessByTasksTests
+    {
+        private static readonly Accelerator Accelerator = TestAccelerator.Create();
+
+        private static float[,] Identity3x3() => new float[,]
+        {
+            { 0, 0, 0 },
+            { 0, 1, 0 },
+            { 0, 0, 0 }
+        };
+
+        private static byte[,] ConstantImage(int height, int width, byte value)
+        {
+            byte[,] image = new byte[height, width];
+            for (int i = 0; i < height; i++)
+                for (int j = 0; j < width; j++)
+                    image[i, j] = value;
+            return image;
+        }
+
+        private static string CreateTempImage(byte[,] data)
+        {
+            string path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString() + ".png");
+            IOImage.Save2DbyteArrayAsImage(data, path);
+            return path;
+        }
+
+        private static string OutputPathFor(string input) => Path.Combine(
+            Path.GetDirectoryName(input) ?? ".",
+            Path.GetFileNameWithoutExtension(input) + "_out.png");
+
+        private static void AssertOutputEquals(string outputPath, byte[,] expected)
+        {
+            Assert.IsTrue(File.Exists(outputPath), $"Output file not created: {outputPath}");
+            byte[,] loaded = IOImage.LoadAs2DArray(outputPath);
+            Assert.AreEqual(expected.GetLength(0), loaded.GetLength(0));
+            Assert.AreEqual(expected.GetLength(1), loaded.GetLength(1));
+            for (int i = 0; i < expected.GetLength(0); i++)
+                for (int j = 0; j < expected.GetLength(1); j++)
+                    Assert.AreEqual(expected[i, j], loaded[i, j]);
+        }
+
+        [TestMethod]
+        public void ProcessByTasks_ProcessesAllFiles_CreatesAllOutputs()
+        {
+            System.Collections.Generic.List<float[,]> filters = new() { Identity3x3() };
+            byte[,] expected = ConstantImage(4, 6, 200);
+
+            string[] files = new string[4];
+            try
+            {
+                for (int i = 0; i < files.Length; i++)
+                    files[i] = CreateTempImage(expected);
+
+                int result = ConvolutionFunctions.ProcessByTasks(files, filters, 2);
+
+                Assert.AreEqual(0, result);
+                foreach (string file in files)
+                    AssertOutputEquals(OutputPathFor(file), expected);
+            }
+            finally
+            {
+                foreach (string file in files)
+                {
+                    if (File.Exists(file)) File.Delete(file);
+                    string outName = OutputPathFor(file);
+                    if (File.Exists(outName)) File.Delete(outName);
+                }
+            }
+        }
+
+        [TestMethod]
+        public void ProcessByTasks_FileCountExceedsAgents_StillProcessesAll()
+        {
+            System.Collections.Generic.List<float[,]> filters = new() { Identity3x3() };
+            byte[,] expected = ConstantImage(5, 5, 128);
+
+            string[] files = new string[3];
+            try
+            {
+                for (int i = 0; i < files.Length; i++)
+                    files[i] = CreateTempImage(expected);
+
+                int result = ConvolutionFunctions.ProcessByTasks(files, filters, 1);
+
+                Assert.AreEqual(0, result);
+                foreach (string file in files)
+                    AssertOutputEquals(OutputPathFor(file), expected);
+                foreach (string file in files)
+                    Assert.IsTrue(File.Exists(OutputPathFor(file)));
+            }
+            finally
+            {
+                foreach (string file in files)
+                {
+                    if (File.Exists(file)) File.Delete(file);
+                    string outName = OutputPathFor(file);
+                    if (File.Exists(outName)) File.Delete(outName);
+                }
+            }
+        }
+
+        [TestMethod]
+        public void ProcessByTasks_ResultMatchesSequentialApplyFilter()
+        {
+            System.Collections.Generic.List<float[,]> filters = new() { Kernels.gaussianBlurKernel };
+            byte[,] image = new byte[7, 9]
+            {
+                { 10, 20, 30, 40, 50, 60, 70, 80, 90 },
+                { 90, 80, 70, 60, 50, 40, 30, 20, 10 },
+                { 15, 25, 35, 45, 55, 65, 75, 85, 95 },
+                { 5, 15, 25, 35, 45, 55, 65, 75, 85 },
+                { 24, 32, 40, 48, 56, 64, 72, 80, 88 },
+                { 200, 180, 160, 140, 120, 100, 80, 60, 40 },
+                { 1, 3, 5, 7, 9, 11, 13, 99, 255 }
+            };
+
+            byte[,] expected = ConvolutionFunctions.applyFilter(Kernels.gaussianBlurKernel, image, Accelerator);
+
+            string file = CreateTempImage(image);
+            try
+            {
+                int result = ConvolutionFunctions.ProcessByTasks(new[] { file }, filters, 1);
+
+                Assert.AreEqual(0, result);
+                AssertOutputEquals(OutputPathFor(file), expected);
+            }
+            finally
+            {
+                if (File.Exists(file)) File.Delete(file);
+                string outName = OutputPathFor(file);
+                if (File.Exists(outName)) File.Delete(outName);
+            }
+        }
+
+        [TestMethod]
+        public void ProcessByTasks_ReturnsMinusOne_OnMissingFile()
+        {
+            System.Collections.Generic.List<float[,]> filters = new() { Identity3x3() };
+
+            int result = ConvolutionFunctions.ProcessByTasks(
+                new[] { Path.Combine(Path.GetTempPath(), "nonexistent_for_tests.png") },
+                filters, 1);
+
+            Assert.AreEqual(-1, result);
         }
     }
 
